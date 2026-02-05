@@ -30,7 +30,7 @@ data-quality-framework/
 ### 4. FK 정합성 체크 (check_foreign_key.sql)
 외래 키 참조 무결성을 검증합니다.
 
-## 🚀 사용법
+## 사용법
 
 ### Python 예제 실행
 
@@ -39,16 +39,7 @@ cd examples
 python sample_validation.py
 ```
 
-### SQL 직접 실행
-
-각 SQL 파일의 변수를 수정하여 직접 실행할 수 있습니다:
-
-```sql
--- 예시: 중복 체크
--- ${TABLE_NAME}, ${COLUMNS} 등을 실제 값으로 대체하여 실행
-```
-
-## ⚙️ 설정
+## 설정
 
 ### 환경 변수
 
@@ -60,12 +51,8 @@ export DB_USER=your_username
 export DB_PASSWORD=your_password
 ```
 
-## 📋 요구사항
+## 요구사항
 
 - Python 3.8+
 - psycopg2 (PostgreSQL) 또는 해당 DB 드라이버
 - 대상 데이터베이스 접근 권한
-
-## 📝 라이선스
-
-MIT License
