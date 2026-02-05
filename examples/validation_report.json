@@ -1,0 +1,130 @@
+{
+  "total_checks": 8,
+  "passed": 0,
+  "failed": 7,
+  "warnings": 1,
+  "errors": 0,
+  "pass_rate": 0.0,
+  "results": [
+    {
+      "check_name": "duplicate_check_customers",
+      "check_type": "duplicate",
+      "table_name": "customers",
+      "column_name": "name",
+      "result": "FAIL",
+      "total_rows": 5,
+      "violation_count": 1,
+      "violation_percentage": 20.0,
+      "details": {},
+      "executed_at": "2026-02-05T16:31:24.543217"
+    },
+    {
+      "check_name": "null_check_customers_email",
+      "check_type": "null",
+      "table_name": "customers",
+      "column_name": "email",
+      "result": "WARNING",
+      "total_rows": 5,
+      "violation_count": 1,
+      "violation_percentage": 20.0,
+      "details": {
+        "threshold_percentage": 10
+      },
+      "executed_at": "2026-02-05T16:31:24.543244"
+    },
+    {
+      "check_name": "null_check_customers_age",
+      "check_type": "null",
+      "table_name": "customers",
+      "column_name": "age",
+      "result": "FAIL",
+      "total_rows": 5,
+      "violation_count": 1,
+      "violation_percentage": 20.0,
+      "details": {
+        "threshold_percentage": 5
+      },
+      "executed_at": "2026-02-05T16:31:24.543261"
+    },
+    {
+      "check_name": "range_check_customers_age",
+      "check_type": "range",
+      "table_name": "customers",
+      "column_name": "age",
+      "result": "FAIL",
+      "total_rows": 4,
+      "violation_count": 2,
+      "violation_percentage": 50.0,
+      "details": {
+        "expected_min": 0,
+        "expected_max": 120,
+        "actual_min": -5,
+        "actual_max": 150
+      },
+      "executed_at": "2026-02-05T16:31:24.543291"
+    },
+    {
+      "check_name": "range_check_orders_amount",
+      "check_type": "range",
+      "table_name": "orders",
+      "column_name": "amount",
+      "result": "FAIL",
+      "total_rows": 4,
+      "violation_count": 1,
+      "violation_percentage": 25.0,
+      "details": {
+        "expected_min": 0,
+        "expected_max": null,
+        "actual_min": -50,
+        "actual_max": 300
+      },
+      "executed_at": "2026-02-05T16:31:24.543308"
+    },
+    {
+      "check_name": "fk_check_orders_customer_id",
+      "check_type": "foreign_key",
+      "table_name": "orders",
+      "column_name": "customer_id",
+      "result": "FAIL",
+      "total_rows": 4,
+      "violation_count": 1,
+      "violation_percentage": 25.0,
+      "details": {
+        "parent_table": "customers",
+        "parent_column": "id"
+      },
+      "executed_at": "2026-02-05T16:31:24.543327"
+    },
+    {
+      "check_name": "fk_check_order_items_product_id",
+      "check_type": "foreign_key",
+      "table_name": "order_items",
+      "column_name": "product_id",
+      "result": "FAIL",
+      "total_rows": 4,
+      "violation_count": 1,
+      "violation_percentage": 25.0,
+      "details": {
+        "parent_table": "products",
+        "parent_column": "id"
+      },
+      "executed_at": "2026-02-05T16:31:24.543342"
+    },
+    {
+      "check_name": "fk_check_order_items_order_id",
+      "check_type": "foreign_key",
+      "table_name": "order_items",
+      "column_name": "order_id",
+      "result": "FAIL",
+      "total_rows": 4,
+      "violation_count": 1,
+      "violation_percentage": 25.0,
+      "details": {
+        "parent_table": "orders",
+        "parent_column": "id"
+      },
+      "executed_at": "2026-02-05T16:31:24.543357"
+    }
+  ],
+  "generated_at": "2026-02-05T16:31:24.543396"
+}
