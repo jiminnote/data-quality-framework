@@ -2,7 +2,7 @@
 
 데이터 품질을 검증하기 위한 SQL 기반 프레임워크입니다.
 
-## 📁 프로젝트 구조
+## 프로젝트 구조
 
 ```
 data-quality-framework/
@@ -16,7 +16,7 @@ data-quality-framework/
     └── sample_validation.py      # 실행 예제
 ```
 
-## 🔍 체크 항목
+## 체크 항목
 
 ### 1. 중복 체크 (check_duplicates.sql)
 테이블 내 중복 레코드를 탐지합니다.
