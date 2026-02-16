@@ -1,8 +1,10 @@
 -- ============================================
--- NULL 체크 (Null Check)
+-- NULL 체크 (Null Check) — MySQL용
 -- ============================================
 -- 설명: 필수 컬럼의 NULL 값을 검증합니다.
 -- 사용법: ${TABLE_NAME}, ${COLUMN_NAME}를 실제 값으로 대체하세요.
+-- ★ TS-2 보강: NULL vs 빈 문자열('') 구분 이슈 해결
+--   - COALESCE(NULLIF(TRIM(col), ''), NULL) IS NULL 패턴 적용
 -- ============================================
 
 -- 1. 단일 컬럼 NULL 체크
@@ -101,3 +103,40 @@ SELECT
         ELSE 'FAIL'
     END AS check_result
 FROM null_stats;
+
+
+-- ============================================
+-- ★ 추가: MySQL 금융 도메인 NULL 체크
+-- ============================================
+
+-- 8. ★ TS-2: NULL + 빈 문자열 통합 체크 (MySQL)
+-- MySQL에서 '' ≠ NULL이지만 비즈니스적으로 둘 다 "없는 값"
+-- COALESCE(NULLIF(TRIM(col), ''), NULL) IS NULL 패턴 적용
+SELECT
+    '${TABLE_NAME}' AS table_name,
+    '${COLUMN_NAME}' AS column_name,
+    COUNT(*) AS total_rows,
+    SUM(CASE WHEN ${COLUMN_NAME} IS NULL THEN 1 ELSE 0 END) AS pure_null_count,
+    SUM(CASE WHEN ${COLUMN_NAME} IS NOT NULL AND TRIM(${COLUMN_NAME}) = '' THEN 1 ELSE 0 END) AS empty_string_count,
+    SUM(CASE WHEN COALESCE(NULLIF(TRIM(${COLUMN_NAME}), ''), NULL) IS NULL THEN 1 ELSE 0 END) AS total_blank_count,
+    ROUND(
+        SUM(CASE WHEN COALESCE(NULLIF(TRIM(${COLUMN_NAME}), ''), NULL) IS NULL THEN 1 ELSE 0 END)
+        / COUNT(*) * 100, 2
+    ) AS blank_percentage,
+    CASE
+        WHEN SUM(CASE WHEN COALESCE(NULLIF(TRIM(${COLUMN_NAME}), ''), NULL) IS NULL THEN 1 ELSE 0 END)
+             / COUNT(*) * 100 <= ${THRESHOLD_PERCENTAGE} THEN 'PASS'
+        ELSE 'FAIL'
+    END AS check_result
+FROM ${TABLE_NAME};
+
+
+-- 9. 금융 필수 컬럼 일괄 NULL 체크 (카드거래)
+SELECT
+    'src_card_transactions' AS table_name,
+    COUNT(*) AS total_rows,
+    SUM(CASE WHEN transaction_date IS NULL THEN 1 ELSE 0 END) AS null_tx_date,
+    SUM(CASE WHEN transaction_amount IS NULL THEN 1 ELSE 0 END) AS null_tx_amount,
+    SUM(CASE WHEN customer_id IS NULL THEN 1 ELSE 0 END) AS null_customer_id,
+    SUM(CASE WHEN approval_status IS NULL THEN 1 ELSE 0 END) AS null_approval_status
+FROM src_card_transactions;

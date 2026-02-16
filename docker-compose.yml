@@ -1,0 +1,51 @@
+# ==========================================
+# Data Quality Framework - Docker 환경
+# ==========================================
+# MySQL 8.0 + 테스트 데이터 자동 초기화
+#
+# 사용법:
+#   docker-compose up -d
+#   docker-compose logs -f mysql
+#
+# ★ TS-5: healthcheck로 MySQL 준비 완료 후 사용 보장
+# ==========================================
+
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: dq-mysql
+    restart: on-failure
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: data_quality
+      MYSQL_USER: dq_user
+      MYSQL_PASSWORD: dq_password
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/init_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./sql/init_data.sql:/docker-entrypoint-initdb.d/02_data.sql
+      - ./sql/init_target.sql:/docker-entrypoint-initdb.d/03_target.sql
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+      --max_allowed_packet=256M
+      --innodb_buffer_pool_size=512M
+      --wait_timeout=28800
+    # ★ TS-5: MySQL 서비스 준비 완료 확인 (컨테이너 시작 ≠ 서비스 준비)
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  mysql_data:
+    driver: local

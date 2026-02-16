@@ -1,0 +1,51 @@
+# ==========================================
+# 비식별화 검증 규칙 정의
+# ==========================================
+# 개인정보 마스킹/해싱 적용 여부 검증
+# ★ TS-3 반영: 정규식 대신 SUBSTRING 기반 검증
+
+masking_rules:
+  - rule_id: "MASK-001"
+    description: "주민번호 뒤 7자리 마스킹 검증"
+    table: "tgt_customers"
+    column: "resident_number"
+    masking_type: "ssn"
+    # 포맷: 123456-******* (앞 6자리 유지, 뒤 7자리 마스킹)
+    # ★ TS-3: REGEXP 대신 SUBSTRING 기반 검증
+    validation_method: "substring"
+    expected_pattern_start: 8      # 8번째 위치부터
+    expected_pattern_value: "*******"
+    expected_length: 14
+    enabled: true
+
+  - rule_id: "MASK-002"
+    description: "전화번호 중간 4자리 마스킹 검증"
+    table: "tgt_customers"
+    column: "phone_number"
+    masking_type: "phone"
+    # 포맷: 010-****-5678 (중간 4자리 마스킹)
+    validation_method: "substring"
+    expected_pattern_start: 5      # 5번째 위치부터
+    expected_pattern_value: "****"
+    expected_length: 13
+    enabled: true
+
+  - rule_id: "MASK-003"
+    description: "고객 이름 해싱 적용 검증"
+    table: "tgt_customers"
+    column: "customer_name_hash"
+    masking_type: "hash"
+    # SHA-256 해시: 64자 16진수 문자열
+    validation_method: "length"
+    expected_length: 64
+    # ★ TS-3: 해시값은 길이 + 16진수 문자 집합으로 검증
+    enabled: true
+
+  - rule_id: "MASK-004"
+    description: "비식별화 누락 레코드 검출 (원본 값 잔존)"
+    table: "tgt_customers"
+    column: "resident_number"
+    masking_type: "leak_check"
+    # 마스킹 안 된 원본 주민번호 패턴 검출
+    validation_method: "no_plain_ssn"
+    enabled: true

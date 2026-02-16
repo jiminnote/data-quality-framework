@@ -1,0 +1,54 @@
+# ==========================================
+# NULL 검증 규칙 정의
+# ==========================================
+# 필수 컬럼의 NULL 비율 체크 규칙
+# ★ TS-2 반영: include_empty_string 옵션으로 빈 문자열 포함 검사
+
+null_rules:
+  - rule_id: "NULL-001"
+    description: "고객 이름 NULL 체크"
+    table: "src_customers"
+    column: "customer_name"
+    max_null_ratio: 0.0  # 0% — NULL 불허
+    include_empty_string: true  # ★ 빈 문자열도 NULL로 간주
+    enabled: true
+
+  - rule_id: "NULL-002"
+    description: "고객 전화번호 NULL 체크"
+    table: "src_customers"
+    column: "phone_number"
+    max_null_ratio: 0.05  # 5% 이하 허용
+    include_empty_string: true
+    enabled: true
+
+  - rule_id: "NULL-003"
+    description: "거래 금액 NULL 체크"
+    table: "src_card_transactions"
+    column: "transaction_amount"
+    max_null_ratio: 0.0
+    include_empty_string: false
+    enabled: true
+
+  - rule_id: "NULL-004"
+    description: "거래 일시 NULL 체크"
+    table: "src_card_transactions"
+    column: "transaction_date"
+    max_null_ratio: 0.0
+    include_empty_string: false
+    enabled: true
+
+  - rule_id: "NULL-005"
+    description: "가맹점 코드 NULL 체크"
+    table: "src_card_transactions"
+    column: "merchant_id"
+    max_null_ratio: 0.01  # 1% 이하 허용
+    include_empty_string: false
+    enabled: true
+
+  - rule_id: "NULL-006"
+    description: "타겟 고객 이름(해시) NULL 체크"
+    table: "tgt_customers"
+    column: "customer_name_hash"
+    max_null_ratio: 0.0
+    include_empty_string: true
+    enabled: true

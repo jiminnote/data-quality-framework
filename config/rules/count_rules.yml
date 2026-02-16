@@ -1,0 +1,38 @@
+# ==========================================
+# 건수 검증 규칙 정의
+# ==========================================
+# 소스 테이블과 타겟 테이블 간 건수 비교 규칙
+
+count_rules:
+  - rule_id: "CNT-001"
+    description: "고객 테이블 소스/타겟 건수 비교"
+    source_table: "src_customers"
+    target_table: "tgt_customers"
+    threshold: 0.0
+    where_clause: null
+    enabled: true
+
+  - rule_id: "CNT-002"
+    description: "카드거래 테이블 소스/타겟 건수 비교"
+    source_table: "src_card_transactions"
+    target_table: "tgt_card_transactions"
+    threshold: 0.01  # 1% 허용 오차
+    where_clause: null
+    enabled: true
+
+  - rule_id: "CNT-003"
+    description: "일별 집계 건수 검증 (거래일 기준 DISTINCT 날짜수)"
+    source_table: "src_card_transactions"
+    target_table: "tgt_daily_summary"
+    threshold: 0.0
+    source_count_query: "SELECT COUNT(DISTINCT DATE(transaction_date)) AS cnt FROM src_card_transactions"
+    target_count_query: "SELECT COUNT(*) AS cnt FROM tgt_daily_summary"
+    enabled: true
+
+  - rule_id: "CNT-004"
+    description: "승인 완료 거래 건수 비교 (WHERE 조건)"
+    source_table: "src_card_transactions"
+    target_table: "tgt_card_transactions"
+    threshold: 0.0
+    where_clause: "approval_status = 'approved'"
+    enabled: true

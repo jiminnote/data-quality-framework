@@ -1,484 +1,387 @@
 """
-Data Quality Framework - Sample Validation Script
-데이터 품질 검증 실행 예제
+Data Quality Framework - 통합 프레임워크 사용 예제
+================================================
+
+이 스크립트는 data-quality-framework의 핵심 모듈을 활용하여
+금융 데이터 품질 검증을 실행하는 예제입니다.
+
+사용법:
+  # 프로젝트 루트에서 실행
+  python -m examples.sample_validation
+
+  # 또는 직접 실행
+  cd examples && python sample_validation.py
 """
 
+import sys
 import os
-import json
-from datetime import datetime
-from dataclasses import dataclass, field
-from typing import Optional
-from enum import Enum
 
-# PostgreSQL 사용 시: pip install psycopg2-binary
-# MySQL 사용 시: pip install mysql-connector-python
-# SQLite 사용 시: 기본 내장
+# 프로젝트 루트를 sys.path에 추가 (직접 실행 시)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-
-class CheckType(Enum):
-    """데이터 품질 체크 유형"""
-    DUPLICATE = "duplicate"
-    NULL = "null"
-    RANGE = "range"
-    FOREIGN_KEY = "foreign_key"
+from src.checker.base_checker import CheckResult, CheckStatus
+from src.checker.count_checker import CountChecker
+from src.checker.null_checker import NullChecker
+from src.checker.duplicate_checker import DuplicateChecker
+from src.checker.range_checker import RangeChecker
+from src.checker.masking_checker import MaskingChecker
+from src.reporter.html_reporter import HTMLReporter
+from src.reporter.csv_reporter import CSVReporter
 
 
-class CheckResult(Enum):
-    """체크 결과 상태"""
-    PASS = "PASS"
-    FAIL = "FAIL"
-    WARNING = "WARNING"
-    ERROR = "ERROR"
+# ---------------------------------------------------------------------------
+# 1) SQLite 기반 Mock DB Connector (MySQL 없이 로컬 테스트용)
+# ---------------------------------------------------------------------------
+class MockDBConnector:
+    """
+    SQLite 인메모리 DB를 사용하는 테스트용 커넥터.
+    MySQL이 없는 환경에서도 프레임워크 동작을 확인할 수 있습니다.
+    """
 
+    def __init__(self):
+        import sqlite3
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self._init_schema()
+        self._init_data()
 
-@dataclass
-class ValidationResult:
-    """검증 결과를 담는 데이터 클래스"""
-    check_name: str
-    check_type: CheckType
-    table_name: str
-    column_name: Optional[str]
-    result: CheckResult
-    total_rows: int = 0
-    violation_count: int = 0
-    violation_percentage: float = 0.0
-    details: dict = field(default_factory=dict)
-    executed_at: datetime = field(default_factory=datetime.now)
-    
-    def to_dict(self) -> dict:
-        return {
-            "check_name": self.check_name,
-            "check_type": self.check_type.value,
-            "table_name": self.table_name,
-            "column_name": self.column_name,
-            "result": self.result.value,
-            "total_rows": self.total_rows,
-            "violation_count": self.violation_count,
-            "violation_percentage": self.violation_percentage,
-            "details": self.details,
-            "executed_at": self.executed_at.isoformat()
-        }
+    # -- 스키마 ----------------------------------------------------------
+    def _init_schema(self):
+        cur = self.conn.cursor()
+        cur.executescript("""
+            -- 소스 테이블
+            CREATE TABLE src_customers (
+                customer_id   INTEGER PRIMARY KEY,
+                name          TEXT,
+                email         TEXT,
+                phone         TEXT,
+                ssn           TEXT,
+                birth_date    TEXT,
+                created_at    TEXT DEFAULT (datetime('now'))
+            );
 
+            CREATE TABLE src_merchants (
+                merchant_id   INTEGER PRIMARY KEY,
+                merchant_name TEXT,
+                category      TEXT
+            );
 
-class DataQualityChecker:
-    """데이터 품질 검증 클래스"""
-    
-    def __init__(self, connection):
-        """
-        Args:
-            connection: 데이터베이스 연결 객체
-        """
-        self.connection = connection
-        self.results: list[ValidationResult] = []
-    
-    def execute_query(self, query: str) -> list[dict]:
-        """SQL 쿼리를 실행하고 결과를 반환합니다."""
-        cursor = self.connection.cursor()
-        cursor.execute(query)
-        columns = [desc[0] for desc in cursor.description]
-        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
-        cursor.close()
-        return results
-    
-    def check_duplicates(
-        self, 
-        table_name: str, 
-        columns: list[str],
-        check_name: Optional[str] = None
-    ) -> ValidationResult:
-        """중복 체크를 수행합니다."""
-        columns_str = ", ".join(columns)
-        check_name = check_name or f"duplicate_check_{table_name}"
-        
-        query = f"""
-        SELECT 
-            COUNT(*) AS total_rows,
-            COUNT(*) - COUNT(DISTINCT ({columns_str})) AS duplicate_count
-        FROM {table_name}
-        """
-        
-        try:
-            result = self.execute_query(query)[0]
-            total_rows = result["total_rows"]
-            duplicate_count = result["duplicate_count"]
-            
-            validation_result = ValidationResult(
-                check_name=check_name,
-                check_type=CheckType.DUPLICATE,
-                table_name=table_name,
-                column_name=columns_str,
-                result=CheckResult.PASS if duplicate_count == 0 else CheckResult.FAIL,
-                total_rows=total_rows,
-                violation_count=duplicate_count,
-                violation_percentage=round(duplicate_count / total_rows * 100, 2) if total_rows > 0 else 0
+            CREATE TABLE src_card_transactions (
+                txn_id        INTEGER PRIMARY KEY,
+                customer_id   INTEGER,
+                merchant_id   INTEGER,
+                txn_amount    REAL,
+                txn_date      TEXT,
+                status        TEXT DEFAULT 'NORMAL'
+            );
+
+            -- 타겟 테이블 (ETL 결과)
+            CREATE TABLE tgt_customers (
+                customer_id   INTEGER PRIMARY KEY,
+                name_hash     TEXT,
+                email         TEXT,
+                phone_masked  TEXT,
+                ssn_masked    TEXT,
+                birth_date    TEXT
+            );
+
+            CREATE TABLE tgt_card_transactions (
+                txn_id        INTEGER PRIMARY KEY,
+                customer_id   INTEGER,
+                merchant_id   INTEGER,
+                txn_amount    REAL,
+                txn_date      TEXT,
+                status        TEXT
+            );
+        """)
+        self.conn.commit()
+
+    # -- 샘플 데이터 (의도적 품질 이슈 포함) --------------------------------
+    def _init_data(self):
+        cur = self.conn.cursor()
+
+        # 가맹점 100개
+        for i in range(1, 101):
+            cur.execute(
+                "INSERT INTO src_merchants VALUES (?, ?, ?)",
+                (i, f"가맹점_{i:04d}", "음식점" if i % 3 == 0 else "일반"),
             )
-        except Exception as e:
-            validation_result = ValidationResult(
-                check_name=check_name,
-                check_type=CheckType.DUPLICATE,
-                table_name=table_name,
-                column_name=columns_str,
-                result=CheckResult.ERROR,
-                details={"error": str(e)}
+
+        # 고객 500명 (일부 NULL, 빈 문자열 포함)
+        for i in range(1, 501):
+            name = f"고객_{i:05d}"
+            email = f"user{i}@test.com" if i % 20 != 0 else None  # 5% NULL
+            phone = f"010-{i:04d}-{(i*7)%10000:04d}"
+            ssn = f"{900101+i%999999:06d}-{1000000+i:07d}"
+            # TS-2: 10건은 빈 문자열
+            if i % 50 == 0:
+                email = ""
+            cur.execute(
+                "INSERT INTO src_customers VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+                (i, name, email, phone, ssn,
+                 f"199{i%10}-{(i%12)+1:02d}-{(i%28)+1:02d}"),
             )
-        
-        self.results.append(validation_result)
-        return validation_result
-    
-    def check_null(
-        self, 
-        table_name: str, 
-        column_name: str,
-        threshold_percentage: float = 0.0,
-        check_name: Optional[str] = None
-    ) -> ValidationResult:
-        """NULL 체크를 수행합니다."""
-        check_name = check_name or f"null_check_{table_name}_{column_name}"
-        
-        query = f"""
-        SELECT 
-            COUNT(*) AS total_rows,
-            SUM(CASE WHEN {column_name} IS NULL THEN 1 ELSE 0 END) AS null_count
-        FROM {table_name}
-        """
-        
-        try:
-            result = self.execute_query(query)[0]
-            total_rows = result["total_rows"]
-            null_count = result["null_count"]
-            null_percentage = round(null_count / total_rows * 100, 2) if total_rows > 0 else 0
-            
-            if null_percentage <= threshold_percentage:
-                check_result = CheckResult.PASS
-            elif null_percentage <= threshold_percentage * 2:
-                check_result = CheckResult.WARNING
-            else:
-                check_result = CheckResult.FAIL
-            
-            validation_result = ValidationResult(
-                check_name=check_name,
-                check_type=CheckType.NULL,
-                table_name=table_name,
-                column_name=column_name,
-                result=check_result,
-                total_rows=total_rows,
-                violation_count=null_count,
-                violation_percentage=null_percentage,
-                details={"threshold_percentage": threshold_percentage}
+
+        # 거래 2000건 (NULL 금액, 중복 포함)
+        for i in range(1, 2001):
+            cid = (i % 500) + 1
+            mid = (i % 100) + 1
+            amount = round(1000 + (i * 7.3) % 50000, 2)
+            # 의도적 NULL 금액 20건
+            if i % 100 == 0:
+                amount = None
+            # 의도적 음수 금액 5건
+            if i % 400 == 0:
+                amount = -999.99
+            txn_date = f"2024-{(i%12)+1:02d}-{(i%28)+1:02d}"
+            cur.execute(
+                "INSERT INTO src_card_transactions VALUES (?, ?, ?, ?, ?, 'NORMAL')",
+                (i, cid, mid, amount, txn_date),
             )
-        except Exception as e:
-            validation_result = ValidationResult(
-                check_name=check_name,
-                check_type=CheckType.NULL,
-                table_name=table_name,
-                column_name=column_name,
-                result=CheckResult.ERROR,
-                details={"error": str(e)}
+
+        # 중복 거래 10건 (동일 customer_id + txn_date + txn_amount)
+        for i in range(2001, 2011):
+            cur.execute(
+                "INSERT INTO src_card_transactions VALUES "
+                "(?, 1, 1, 5000.00, '2024-01-15', 'NORMAL')",
+                (i,),
             )
-        
-        self.results.append(validation_result)
-        return validation_result
-    
-    def check_range(
-        self, 
-        table_name: str, 
-        column_name: str,
-        min_value: Optional[float] = None,
-        max_value: Optional[float] = None,
-        check_name: Optional[str] = None
-    ) -> ValidationResult:
-        """값 범위 체크를 수행합니다."""
-        check_name = check_name or f"range_check_{table_name}_{column_name}"
-        
-        conditions = []
-        if min_value is not None:
-            conditions.append(f"{column_name} < {min_value}")
-        if max_value is not None:
-            conditions.append(f"{column_name} > {max_value}")
-        
-        if not conditions:
-            raise ValueError("min_value 또는 max_value 중 하나는 지정해야 합니다.")
-        
-        condition_str = " OR ".join(conditions)
-        
-        query = f"""
-        SELECT 
-            COUNT(*) AS total_rows,
-            SUM(CASE WHEN {condition_str} THEN 1 ELSE 0 END) AS out_of_range_count,
-            MIN({column_name}) AS actual_min,
-            MAX({column_name}) AS actual_max
-        FROM {table_name}
-        WHERE {column_name} IS NOT NULL
-        """
-        
-        try:
-            result = self.execute_query(query)[0]
-            total_rows = result["total_rows"]
-            out_of_range_count = result["out_of_range_count"]
-            
-            validation_result = ValidationResult(
-                check_name=check_name,
-                check_type=CheckType.RANGE,
-                table_name=table_name,
-                column_name=column_name,
-                result=CheckResult.PASS if out_of_range_count == 0 else CheckResult.FAIL,
-                total_rows=total_rows,
-                violation_count=out_of_range_count,
-                violation_percentage=round(out_of_range_count / total_rows * 100, 2) if total_rows > 0 else 0,
-                details={
-                    "expected_min": min_value,
-                    "expected_max": max_value,
-                    "actual_min": result["actual_min"],
-                    "actual_max": result["actual_max"]
-                }
+
+        # 타겟 고객 (마스킹 적용 — 일부 누락)
+        for i in range(1, 501):
+            phone_masked = f"010-****-{(i*7)%10000:04d}"
+            ssn_masked = f"******-{1000000+i:07d}"
+            # 의도적 마스킹 누락 5건
+            if i % 100 == 0:
+                phone_masked = f"010-{i:04d}-{(i*7)%10000:04d}"  # 원본 그대로
+                ssn_masked = f"{900101+i%999999:06d}-{1000000+i:07d}"
+            cur.execute(
+                "INSERT INTO tgt_customers VALUES (?, ?, ?, ?, ?, ?)",
+                (i, f"hash_{i}", f"user{i}@test.com", phone_masked, ssn_masked,
+                 f"199{i%10}-{(i%12)+1:02d}-{(i%28)+1:02d}"),
             )
-        except Exception as e:
-            validation_result = ValidationResult(
-                check_name=check_name,
-                check_type=CheckType.RANGE,
-                table_name=table_name,
-                column_name=column_name,
-                result=CheckResult.ERROR,
-                details={"error": str(e)}
+
+        # 타겟 거래 (의도적 50건 누락 -> 건수 불일치)
+        for i in range(1, 1961):
+            cid = (i % 500) + 1
+            mid = (i % 100) + 1
+            amount = round(1000 + (i * 7.3) % 50000, 2)
+            if i % 100 == 0:
+                amount = None
+            txn_date = f"2024-{(i%12)+1:02d}-{(i%28)+1:02d}"
+            cur.execute(
+                "INSERT INTO tgt_card_transactions VALUES "
+                "(?, ?, ?, ?, ?, 'NORMAL')",
+                (i, cid, mid, amount, txn_date),
             )
-        
-        self.results.append(validation_result)
-        return validation_result
-    
-    def check_foreign_key(
-        self, 
-        child_table: str,
-        child_column: str,
-        parent_table: str,
-        parent_column: str,
-        check_name: Optional[str] = None
-    ) -> ValidationResult:
-        """FK 정합성 체크를 수행합니다."""
-        check_name = check_name or f"fk_check_{child_table}_{child_column}"
-        
-        query = f"""
-        SELECT 
-            COUNT(*) AS orphan_count
-        FROM {child_table} c
-        WHERE c.{child_column} IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 
-            FROM {parent_table} p 
-            WHERE p.{parent_column} = c.{child_column}
-          )
-        """
-        
-        try:
-            result = self.execute_query(query)[0]
-            orphan_count = result["orphan_count"]
-            
-            # 전체 행 수 조회
-            total_query = f"SELECT COUNT(*) AS cnt FROM {child_table} WHERE {child_column} IS NOT NULL"
-            total_rows = self.execute_query(total_query)[0]["cnt"]
-            
-            validation_result = ValidationResult(
-                check_name=check_name,
-                check_type=CheckType.FOREIGN_KEY,
-                table_name=child_table,
-                column_name=child_column,
-                result=CheckResult.PASS if orphan_count == 0 else CheckResult.FAIL,
-                total_rows=total_rows,
-                violation_count=orphan_count,
-                violation_percentage=round(orphan_count / total_rows * 100, 2) if total_rows > 0 else 0,
-                details={
-                    "parent_table": parent_table,
-                    "parent_column": parent_column
-                }
-            )
-        except Exception as e:
-            validation_result = ValidationResult(
-                check_name=check_name,
-                check_type=CheckType.FOREIGN_KEY,
-                table_name=child_table,
-                column_name=child_column,
-                result=CheckResult.ERROR,
-                details={"error": str(e)}
-            )
-        
-        self.results.append(validation_result)
-        return validation_result
-    
-    def get_summary(self) -> dict:
-        """검증 결과 요약을 반환합니다."""
-        total = len(self.results)
-        passed = sum(1 for r in self.results if r.result == CheckResult.PASS)
-        failed = sum(1 for r in self.results if r.result == CheckResult.FAIL)
-        warnings = sum(1 for r in self.results if r.result == CheckResult.WARNING)
-        errors = sum(1 for r in self.results if r.result == CheckResult.ERROR)
-        
-        return {
-            "total_checks": total,
-            "passed": passed,
-            "failed": failed,
-            "warnings": warnings,
-            "errors": errors,
-            "pass_rate": round(passed / total * 100, 2) if total > 0 else 0,
-            "results": [r.to_dict() for r in self.results]
-        }
-    
-    def export_report(self, filepath: str) -> None:
-        """검증 결과를 JSON 파일로 내보냅니다."""
-        summary = self.get_summary()
-        summary["generated_at"] = datetime.now().isoformat()
-        
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(summary, f, ensure_ascii=False, indent=2)
-        
-        print(f"Report exported to: {filepath}")
+
+        self.conn.commit()
+
+    # -- DBConnector 인터페이스 구현 ----------------------------------------
+    def execute_query(self, query, params=None):
+        """SELECT 쿼리 실행 -> list[dict] 반환"""
+        cur = self.conn.cursor()
+        cur.execute(query, params or ())
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def execute_count(self, query, params=None):
+        """COUNT 쿼리 실행 -> int 반환"""
+        rows = self.execute_query(query, params)
+        if rows:
+            return list(rows[0].values())[0]
+        return 0
+
+    def close(self):
+        self.conn.close()
 
 
-def create_sample_database():
-    """샘플 SQLite 데이터베이스를 생성합니다."""
-    import sqlite3
-    
-    conn = sqlite3.connect(":memory:")
-    cursor = conn.cursor()
-    
-    # 테이블 생성
-    cursor.executescript("""
-        CREATE TABLE customers (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            email TEXT,
-            age INTEGER,
-            created_at DATE
-        );
-        
-        CREATE TABLE orders (
-            id INTEGER PRIMARY KEY,
-            customer_id INTEGER,
-            amount DECIMAL(10, 2),
-            status TEXT,
-            order_date DATE
-        );
-        
-        CREATE TABLE order_items (
-            id INTEGER PRIMARY KEY,
-            order_id INTEGER,
-            product_id INTEGER,
-            quantity INTEGER,
-            price DECIMAL(10, 2)
-        );
-        
-        CREATE TABLE products (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            price DECIMAL(10, 2),
-            stock INTEGER
-        );
-    """)
-    
-    # 샘플 데이터 삽입
-    cursor.executescript("""
-        -- 고객 데이터 (일부 NULL, 중복 포함)
-        INSERT INTO customers VALUES (1, 'Alice', 'alice@example.com', 25, '2024-01-15');
-        INSERT INTO customers VALUES (2, 'Bob', NULL, 30, '2024-02-20');
-        INSERT INTO customers VALUES (3, 'Charlie', 'charlie@example.com', -5, '2024-03-10');
-        INSERT INTO customers VALUES (4, 'Alice', 'alice2@example.com', 150, '2024-04-05');
-        INSERT INTO customers VALUES (5, 'Eve', 'eve@example.com', NULL, '2024-05-12');
-        
-        -- 제품 데이터
-        INSERT INTO products VALUES (1, 'Product A', 100.00, 50);
-        INSERT INTO products VALUES (2, 'Product B', 200.00, 30);
-        INSERT INTO products VALUES (3, 'Product C', 150.00, 0);
-        
-        -- 주문 데이터 (일부 고아 레코드 포함)
-        INSERT INTO orders VALUES (1, 1, 250.00, 'completed', '2024-06-01');
-        INSERT INTO orders VALUES (2, 2, 100.00, 'pending', '2024-06-15');
-        INSERT INTO orders VALUES (3, 999, 300.00, 'completed', '2024-06-20');  -- 존재하지 않는 customer_id
-        INSERT INTO orders VALUES (4, 3, -50.00, 'invalid_status', '2024-07-01');  -- 음수 금액
-        
-        -- 주문 상품 데이터
-        INSERT INTO order_items VALUES (1, 1, 1, 2, 100.00);
-        INSERT INTO order_items VALUES (2, 1, 2, 1, 200.00);
-        INSERT INTO order_items VALUES (3, 2, 999, 1, 100.00);  -- 존재하지 않는 product_id
-        INSERT INTO order_items VALUES (4, 999, 1, 1, 100.00);  -- 존재하지 않는 order_id
-    """)
-    
-    conn.commit()
-    return conn
-
-
+# ---------------------------------------------------------------------------
+# 2) 메인 실행
+# ---------------------------------------------------------------------------
 def main():
-    """메인 실행 함수"""
-    print("=" * 60)
-    print("Data Quality Framework - Validation Example")
-    print("=" * 60)
+    print("=" * 65)
+    print("  Data Quality Framework - 통합 예제 실행")
+    print("=" * 65)
     print()
-    
-    # 샘플 데이터베이스 생성
-    print("📦 Creating sample database...")
-    conn = create_sample_database()
-    
-    # 데이터 품질 체커 초기화
-    checker = DataQualityChecker(conn)
-    
-    print("🔍 Running data quality checks...\n")
-    
-    # 1. 중복 체크
-    print("1️⃣  Duplicate Check - customers.name")
-    result = checker.check_duplicates("customers", ["name"])
-    print(f"   Result: {result.result.value} (duplicates: {result.violation_count})\n")
-    
-    # 2. NULL 체크
-    print("2️⃣  NULL Check - customers.email")
-    result = checker.check_null("customers", "email", threshold_percentage=10)
-    print(f"   Result: {result.result.value} (nulls: {result.violation_count}, {result.violation_percentage}%)\n")
-    
-    print("3️⃣  NULL Check - customers.age")
-    result = checker.check_null("customers", "age", threshold_percentage=5)
-    print(f"   Result: {result.result.value} (nulls: {result.violation_count}, {result.violation_percentage}%)\n")
-    
-    # 3. 범위 체크
-    print("4️⃣  Range Check - customers.age (0-120)")
-    result = checker.check_range("customers", "age", min_value=0, max_value=120)
-    print(f"   Result: {result.result.value} (out of range: {result.violation_count})")
-    print(f"   Actual range: {result.details['actual_min']} ~ {result.details['actual_max']}\n")
-    
-    print("5️⃣  Range Check - orders.amount (>= 0)")
-    result = checker.check_range("orders", "amount", min_value=0)
-    print(f"   Result: {result.result.value} (violations: {result.violation_count})\n")
-    
-    # 4. FK 정합성 체크
-    print("6️⃣  FK Check - orders.customer_id -> customers.id")
-    result = checker.check_foreign_key("orders", "customer_id", "customers", "id")
-    print(f"   Result: {result.result.value} (orphans: {result.violation_count})\n")
-    
-    print("7️⃣  FK Check - order_items.product_id -> products.id")
-    result = checker.check_foreign_key("order_items", "product_id", "products", "id")
-    print(f"   Result: {result.result.value} (orphans: {result.violation_count})\n")
-    
-    print("8️⃣  FK Check - order_items.order_id -> orders.id")
-    result = checker.check_foreign_key("order_items", "order_id", "orders", "id")
-    print(f"   Result: {result.result.value} (orphans: {result.violation_count})\n")
-    
-    # 결과 요약
-    print("=" * 60)
-    print("📊 VALIDATION SUMMARY")
-    print("=" * 60)
-    summary = checker.get_summary()
-    print(f"   Total Checks: {summary['total_checks']}")
-    print(f"   ✅ Passed: {summary['passed']}")
-    print(f"   ❌ Failed: {summary['failed']}")
-    print(f"   ⚠️  Warnings: {summary['warnings']}")
-    print(f"   🔴 Errors: {summary['errors']}")
-    print(f"   📈 Pass Rate: {summary['pass_rate']}%")
+
+    # -- DB 준비 -----------------------------------------------------------
+    print("[1/6] SQLite 인메모리 DB 초기화 (MySQL 불필요)...")
+    db = MockDBConnector()
+    print("      소스: 고객 500, 가맹점 100, 거래 2,010")
+    print("      타겟: 고객 500, 거래 1,960 (의도적 50건 누락)")
     print()
-    
-    # 리포트 파일 저장
-    report_path = "validation_report.json"
-    checker.export_report(report_path)
-    print(f"📄 Full report saved to: {report_path}")
-    
-    # 연결 종료
-    conn.close()
-    print("\n✨ Validation completed!")
+
+    all_results: list[CheckResult] = []
+
+    # -- 1. 건수 검증 ------------------------------------------------------
+    print("-" * 65)
+    print("[2/6] 건수 검증 (CountChecker)")
+    print("-" * 65)
+    count_rules = [
+        {
+            "rule_id": "CNT-001",
+            "description": "고객 테이블 건수 일치",
+            "source_table": "src_customers",
+            "target_table": "tgt_customers",
+            "threshold_pct": 0.0,
+            "enabled": True,
+        },
+        {
+            "rule_id": "CNT-002",
+            "description": "거래 테이블 건수 일치",
+            "source_table": "src_card_transactions",
+            "target_table": "tgt_card_transactions",
+            "threshold_pct": 1.0,
+            "enabled": True,
+        },
+    ]
+    checker = CountChecker(db, count_rules)
+    results = checker.run_checks()
+    for r in results:
+        tag = "PASS" if r.status == CheckStatus.PASS else "FAIL"
+        print(f"   [{tag}] {r.rule_id} | {r.description} | {r.details}")
+    all_results.extend(results)
+    print()
+
+    # -- 2. NULL 검증 ------------------------------------------------------
+    print("-" * 65)
+    print("[3/6] NULL 검증 (NullChecker) - TS-2 빈 문자열 통합 검출")
+    print("-" * 65)
+    null_rules = [
+        {
+            "rule_id": "NULL-001",
+            "description": "고객 이메일 NULL/빈문자열",
+            "table": "src_customers",
+            "column": "email",
+            "threshold_pct": 5.0,
+            "include_empty_string": True,
+            "enabled": True,
+        },
+        {
+            "rule_id": "NULL-002",
+            "description": "거래 금액 NULL",
+            "table": "src_card_transactions",
+            "column": "txn_amount",
+            "threshold_pct": 0.0,
+            "include_empty_string": False,
+            "enabled": True,
+        },
+    ]
+    checker = NullChecker(db, null_rules)
+    results = checker.run_checks()
+    for r in results:
+        tag = "PASS" if r.status == CheckStatus.PASS else "FAIL"
+        print(f"   [{tag}] {r.rule_id} | {r.description} | {r.details}")
+    all_results.extend(results)
+    print()
+
+    # -- 3. 중복 검증 ------------------------------------------------------
+    print("-" * 65)
+    print("[4/6] 중복 검증 (DuplicateChecker)")
+    print("-" * 65)
+    dup_rules = [
+        {
+            "rule_id": "DUP-001",
+            "description": "거래 중복 (customer_id + txn_date + txn_amount)",
+            "table": "src_card_transactions",
+            "columns": ["customer_id", "txn_date", "txn_amount"],
+            "enabled": True,
+        },
+    ]
+    checker = DuplicateChecker(db, dup_rules)
+    results = checker.run_checks()
+    for r in results:
+        tag = "PASS" if r.status == CheckStatus.PASS else "FAIL"
+        print(f"   [{tag}] {r.rule_id} | {r.description} | {r.details}")
+    all_results.extend(results)
+    print()
+
+    # -- 4. 범위 검증 ------------------------------------------------------
+    print("-" * 65)
+    print("[5/6] 범위 검증 (RangeChecker)")
+    print("-" * 65)
+    range_rules = [
+        {
+            "rule_id": "RNG-001",
+            "description": "거래 금액 양수 검증",
+            "table": "src_card_transactions",
+            "column": "txn_amount",
+            "min_value": 0,
+            "max_value": 100000000,
+            "enabled": True,
+        },
+    ]
+    checker = RangeChecker(db, range_rules)
+    results = checker.run_checks()
+    for r in results:
+        tag = "PASS" if r.status == CheckStatus.PASS else "FAIL"
+        print(f"   [{tag}] {r.rule_id} | {r.description} | {r.details}")
+    all_results.extend(results)
+    print()
+
+    # -- 5. 비식별화 검증 --------------------------------------------------
+    print("-" * 65)
+    print("[6/6] 비식별화 검증 (MaskingChecker) - TS-3 SUBSTRING 최적화")
+    print("-" * 65)
+    mask_rules = [
+        {
+            "rule_id": "MASK-001",
+            "description": "전화번호 마스킹 확인",
+            "table": "tgt_customers",
+            "column": "phone_masked",
+            "masking_type": "phone",
+            "pattern_check": "SUBSTR({column}, 5, 4) = '****'",
+            "enabled": True,
+        },
+    ]
+    checker = MaskingChecker(db, mask_rules)
+    results = checker.run_checks()
+    for r in results:
+        tag = "PASS" if r.status == CheckStatus.PASS else "FAIL"
+        print(f"   [{tag}] {r.rule_id} | {r.description} | {r.details}")
+    all_results.extend(results)
+    print()
+
+    # -- 결과 요약 ---------------------------------------------------------
+    print("=" * 65)
+    print("  검증 결과 요약")
+    print("=" * 65)
+    total = len(all_results)
+    passed = sum(1 for r in all_results if r.status == CheckStatus.PASS)
+    failed = sum(1 for r in all_results if r.status == CheckStatus.FAIL)
+    errors = sum(1 for r in all_results if r.status == CheckStatus.ERROR)
+    pass_rate = round(passed / total * 100, 1) if total > 0 else 0
+
+    print(f"   전체 검증 : {total}건")
+    print(f"   PASS     : {passed}건")
+    print(f"   FAIL     : {failed}건")
+    print(f"   ERROR    : {errors}건")
+    print(f"   통과율   : {pass_rate}%")
+    print()
+
+    # -- 리포트 생성 -------------------------------------------------------
+    reports_dir = os.path.join(os.path.dirname(__file__), '..', 'reports')
+    os.makedirs(reports_dir, exist_ok=True)
+
+    # HTML 리포트
+    html_reporter = HTMLReporter(all_results)
+    html_path = os.path.join(reports_dir, 'example_report.html')
+    html_reporter.generate(html_path)
+    print(f"   HTML 리포트: {os.path.abspath(html_path)}")
+
+    # CSV 리포트
+    csv_reporter = CSVReporter(all_results)
+    csv_path = os.path.join(reports_dir, 'example_report.csv')
+    csv_reporter.generate(csv_path)
+    print(f"   CSV  리포트: {os.path.abspath(csv_path)}")
+
+    print()
+    print("검증 완료! 상세 결과는 reports/ 디렉토리를 확인하세요.")
+
+    db.close()
+    return 0 if failed == 0 and errors == 0 else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
